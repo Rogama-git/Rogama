@@ -1,14 +1,15 @@
 """
 Servico de Geracao de Orcamentos - Rogama SL
-Recebe JSON com orcamento -> preenche Excel -> converte PDF -> retorna base64
+Recebe JSON com orcamento -> preenche Excel -> retorna URL publica
 """
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, send_from_directory
 import json
 import os
 import shutil
 import base64
 import subprocess
 import tempfile
+import uuid
 from datetime import datetime
 from openpyxl import load_workbook
 
@@ -18,6 +19,14 @@ TEMPLATES = {
     'ROGAMA':   '/app/templates/Ppto Rogama - 2022.xlsx',
     'MULTIMAP': '/app/templates/Presupuesto Multimap Logo Nuevo.xlsm'
 }
+
+# Diretorio para guardar ficheiros temporarios
+FILES_DIR = '/app/files'
+os.makedirs(FILES_DIR, exist_ok=True)
+
+# URL base do servico (configura via variavel de ambiente)
+BASE_URL = os.environ.get('BASE_URL', 'https://n8n-rogama-orcamentos.ht493o.easypanel.host')
+
 
 def preencher_rogama(orcamento: dict, dest: str):
     wb = load_workbook(dest)
@@ -88,12 +97,18 @@ def excel_para_pdf(excel_path: str) -> str:
         pdf_path = excel_path.rsplit('.', 1)[0] + '.pdf'
         return pdf_path if os.path.exists(pdf_path) else None
     except Exception:
-        return None  # LibreOffice nao disponivel
+        return None
 
 
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok', 'service': 'rogama-orcamentos'})
+
+
+@app.route('/files/<filename>', methods=['GET'])
+def serve_file(filename):
+    """Serve ficheiros gerados publicamente"""
+    return send_from_directory(FILES_DIR, filename)
 
 
 @app.route('/gerar-orcamento', methods=['POST'])
@@ -110,38 +125,48 @@ def gerar_orcamento():
         localidad = orcamento.get('localidad', '').replace('/', '-')[:20]
         nome_base = f"{exp} - {localidad}"
 
-        with tempfile.TemporaryDirectory() as tmpdir:
-            ext = '.xlsm' if template == 'MULTIMAP' else '.xlsx'
-            excel_dest = os.path.join(tmpdir, f"{nome_base}{ext}")
-            shutil.copy(TEMPLATES[template], excel_dest)
+        ext = '.xlsm' if template == 'MULTIMAP' else '.xlsx'
 
-            if template == 'MULTIMAP':
-                preencher_multimap(orcamento, excel_dest)
-            else:
-                preencher_rogama(orcamento, excel_dest)
+        # Gera ID unico para o ficheiro
+        file_id = str(uuid.uuid4())[:8]
+        excel_filename = f"{file_id}_{nome_base}{ext}"
+        excel_dest = os.path.join(FILES_DIR, excel_filename)
 
-            # Tenta converter para PDF
-            pdf_path = excel_para_pdf(excel_dest)
+        shutil.copy(TEMPLATES[template], excel_dest)
 
-            with open(excel_dest, 'rb') as f:
-                excel_b64 = base64.b64encode(f.read()).decode('utf-8')
+        if template == 'MULTIMAP':
+            preencher_multimap(orcamento, excel_dest)
+        else:
+            preencher_rogama(orcamento, excel_dest)
 
-            if pdf_path and os.path.exists(pdf_path):
-                with open(pdf_path, 'rb') as f:
-                    pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
-                nome_ficheiro = f"{nome_base}.pdf"
-            else:
-                pdf_b64 = None
-                nome_ficheiro = f"{nome_base}{ext}"
+        # Gera URL publica para o Excel
+        excel_url = f"{BASE_URL}/files/{excel_filename}"
 
-            return jsonify({
-                'success': True,
-                'expediente': exp,
-                'template': template,
-                'nome_ficheiro': nome_ficheiro,
-                'pdf_base64': pdf_b64,
-                'excel_base64': excel_b64
-            })
+        # Tenta converter para PDF
+        pdf_url = None
+        pdf_filename = None
+        pdf_path = excel_para_pdf(excel_dest)
+        if pdf_path and os.path.exists(pdf_path):
+            pdf_filename = os.path.basename(pdf_path)
+            pdf_url = f"{BASE_URL}/files/{pdf_filename}"
+            nome_ficheiro = f"{nome_base}.pdf"
+        else:
+            nome_ficheiro = f"{nome_base}{ext}"
+
+        # Tambem retorna base64 para compatibilidade
+        with open(excel_dest, 'rb') as f:
+            excel_b64 = base64.b64encode(f.read()).decode('utf-8')
+
+        return jsonify({
+            'success': True,
+            'expediente': exp,
+            'template': template,
+            'nome_ficheiro': nome_ficheiro,
+            'excel_url': excel_url,
+            'pdf_url': pdf_url,
+            'excel_base64': excel_b64,
+            'pdf_base64': None
+        })
 
     except Exception as e:
         return jsonify({'success': False, 'erro': str(e)}), 500
