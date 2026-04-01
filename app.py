@@ -15,8 +15,8 @@ from openpyxl import load_workbook
 app = Flask(__name__)
 
 TEMPLATES = {
-    'ROGAMA':   '/app/templates/Ppto_Rogama_-_2022.xlsx',
-    'MULTIMAP': '/app/templates/Presupuesto_Multimap_Logo_Nuevo.xlsm'
+    'ROGAMA':   '/app/templates/Ppto Rogama - 2022.xlsx',
+    'MULTIMAP': '/app/templates/Presupuesto Multimap Logo Nuevo.xlsm'
 }
 
 def preencher_rogama(orcamento: dict, dest: str):
