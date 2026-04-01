@@ -1,6 +1,6 @@
 """
-Serviço de Geração de Orçamentos - Rogama SL
-Recebe JSON com orçamento → preenche Excel → converte PDF → retorna base64
+Servico de Geracao de Orcamentos - Rogama SL
+Recebe JSON com orcamento -> preenche Excel -> converte PDF -> retorna base64
 """
 from flask import Flask, request, jsonify
 import json
@@ -20,10 +20,9 @@ TEMPLATES = {
 }
 
 def preencher_rogama(orcamento: dict, dest: str):
-    wb = load_workbook(TEMPLATES['ROGAMA'])
+    wb = load_workbook(dest)
     ws = wb['PRESUPUESTO']
 
-    # Cabeçalho
     ws['F42'] = orcamento.get('expediente', '')
     ws['F43'] = orcamento.get('cliente', '')
     ws['F44'] = orcamento.get('direccion', '')
@@ -31,22 +30,18 @@ def preencher_rogama(orcamento: dict, dest: str):
     ws['F46'] = orcamento.get('cp', '')
     ws['F47'] = orcamento.get('telefono', '')
     ws['F48'] = orcamento.get('fecha', datetime.now().strftime('%d/%m/%Y'))
-
-    # Nº expediente e direção
     ws['I64'] = orcamento.get('expediente', '')
     ws['I65'] = f"{orcamento.get('direccion', '')} - {orcamento.get('localidad', '')}"
 
-    # Items — linhas 71-81
     items = orcamento.get('items', [])
     for i, item in enumerate(items[:11]):
         row = 71 + i
         ws[f'A{row}'] = item.get('codigo', '')
-        ws[f'E{row}'] = item.get('concepto', '')
+        ws[f'E{row}'] = item.get('concepto_corto') or item.get('concepto', '')
         ws[f'J{row}'] = item.get('cantidad', 1)
         ws[f'K{row}'] = item.get('precio_unitario', 0)
         ws[f'L{row}'] = round((item.get('cantidad', 1)) * (item.get('precio_unitario', 0)), 2)
 
-    # Totais
     ws['L82'] = round(orcamento.get('total_sem_iva', 0), 2)
     ws['K83'] = 0.21
     ws['L83'] = round(orcamento.get('iva', 0), 2)
@@ -57,10 +52,9 @@ def preencher_rogama(orcamento: dict, dest: str):
 
 
 def preencher_multimap(orcamento: dict, dest: str):
-    wb = load_workbook(TEMPLATES['MULTIMAP'])
+    wb = load_workbook(dest)
     ws = wb['PRESUPUESTO']
 
-    # Cabeçalho
     ws['E5']  = orcamento.get('expediente', '')
     ws['E6']  = orcamento.get('cliente', '')
     ws['E7']  = orcamento.get('direccion', '')
@@ -69,12 +63,11 @@ def preencher_multimap(orcamento: dict, dest: str):
     ws['E10'] = orcamento.get('fecha', datetime.now().strftime('%d/%m/%Y'))
     ws['E11'] = orcamento.get('telefono', '')
 
-    # Items — linhas 136+
     items = orcamento.get('items', [])
     for i, item in enumerate(items[:50]):
         row = 136 + i
         ws[f'B{row}'] = item.get('unidad', 'ud')
-        ws[f'C{row}'] = item.get('concepto', '')
+        ws[f'C{row}'] = item.get('concepto_corto') or item.get('concepto', '')
         qty   = item.get('cantidad', 1)
         preco = item.get('precio_unitario', 0)
         ws[f'D{row}'] = qty
@@ -86,18 +79,16 @@ def preencher_multimap(orcamento: dict, dest: str):
 
 def excel_para_pdf(excel_path: str) -> str:
     """Converte Excel para PDF usando LibreOffice headless"""
-    output_dir = os.path.dirname(excel_path)
-    result = subprocess.run([
-        'libreoffice', '--headless', '--convert-to', 'pdf',
-        '--outdir', output_dir, excel_path
-    ], capture_output=True, text=True, timeout=60)
-
-    pdf_path = excel_path.rsplit('.', 1)[0] + '.pdf'
-    if not os.path.exists(pdf_path):
-        # Tenta com extensão xlsm
-        pdf_path = excel_path.replace('.xlsm', '.pdf').replace('.xlsx', '.pdf')
-
-    return pdf_path if os.path.exists(pdf_path) else None
+    try:
+        output_dir = os.path.dirname(excel_path)
+        subprocess.run([
+            'libreoffice', '--headless', '--convert-to', 'pdf',
+            '--outdir', output_dir, excel_path
+        ], capture_output=True, text=True, timeout=60)
+        pdf_path = excel_path.rsplit('.', 1)[0] + '.pdf'
+        return pdf_path if os.path.exists(pdf_path) else None
+    except Exception:
+        return None  # LibreOffice nao disponivel
 
 
 @app.route('/health', methods=['GET'])
@@ -119,49 +110,38 @@ def gerar_orcamento():
         localidad = orcamento.get('localidad', '').replace('/', '-')[:20]
         nome_base = f"{exp} - {localidad}"
 
-        # Cria ficheiro temporário
         with tempfile.TemporaryDirectory() as tmpdir:
+            ext = '.xlsm' if template == 'MULTIMAP' else '.xlsx'
+            excel_dest = os.path.join(tmpdir, f"{nome_base}{ext}")
+            shutil.copy(TEMPLATES[template], excel_dest)
+
             if template == 'MULTIMAP':
-                excel_dest = os.path.join(tmpdir, f"{nome_base}.xlsx")
-                shutil.copy(TEMPLATES['MULTIMAP'], excel_dest)
                 preencher_multimap(orcamento, excel_dest)
             else:
-                excel_dest = os.path.join(tmpdir, f"{nome_base}.xlsx")
-                shutil.copy(TEMPLATES['ROGAMA'], excel_dest)
                 preencher_rogama(orcamento, excel_dest)
 
-            # Converte para PDF
+            # Tenta converter para PDF
             pdf_path = excel_para_pdf(excel_dest)
+
+            with open(excel_dest, 'rb') as f:
+                excel_b64 = base64.b64encode(f.read()).decode('utf-8')
 
             if pdf_path and os.path.exists(pdf_path):
                 with open(pdf_path, 'rb') as f:
                     pdf_b64 = base64.b64encode(f.read()).decode('utf-8')
-
-                with open(excel_dest, 'rb') as f:
-                    excel_b64 = base64.b64encode(f.read()).decode('utf-8')
-
-                return jsonify({
-                    'success': True,
-                    'expediente': exp,
-                    'template': template,
-                    'nome_ficheiro': f"{nome_base}.pdf",
-                    'pdf_base64': pdf_b64,
-                    'excel_base64': excel_b64
-                })
+                nome_ficheiro = f"{nome_base}.pdf"
             else:
-                # Retorna só o Excel se PDF falhar
-                with open(excel_dest, 'rb') as f:
-                    excel_b64 = base64.b64encode(f.read()).decode('utf-8')
+                pdf_b64 = None
+                nome_ficheiro = f"{nome_base}{ext}"
 
-                return jsonify({
-                    'success': True,
-                    'expediente': exp,
-                    'template': template,
-                    'nome_ficheiro': f"{nome_base}.xlsx",
-                    'pdf_base64': None,
-                    'excel_base64': excel_b64,
-                    'aviso': 'PDF não gerado, só Excel disponível'
-                })
+            return jsonify({
+                'success': True,
+                'expediente': exp,
+                'template': template,
+                'nome_ficheiro': nome_ficheiro,
+                'pdf_base64': pdf_b64,
+                'excel_base64': excel_b64
+            })
 
     except Exception as e:
         return jsonify({'success': False, 'erro': str(e)}), 500
