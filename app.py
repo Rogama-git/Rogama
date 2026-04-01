@@ -10,6 +10,7 @@ import base64
 import subprocess
 import tempfile
 import uuid
+from urllib.parse import quote
 from datetime import datetime
 from openpyxl import load_workbook
 
@@ -124,12 +125,13 @@ def gerar_orcamento():
 
         localidad = orcamento.get('localidad', '').replace('/', '-')[:20]
         nome_base = f"{exp} - {localidad}"
+        nome_base_safe = nome_base.replace(' ', '_')
 
         ext = '.xlsm' if template == 'MULTIMAP' else '.xlsx'
 
         # Gera ID unico para o ficheiro
         file_id = str(uuid.uuid4())[:8]
-        excel_filename = f"{file_id}_{nome_base}{ext}"
+        excel_filename = f"{file_id}_{nome_base_safe}{ext}"
         excel_dest = os.path.join(FILES_DIR, excel_filename)
 
         shutil.copy(TEMPLATES[template], excel_dest)
