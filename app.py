@@ -135,8 +135,12 @@ def gerar_orcamento():
             orcamento = json.loads(orcamento)
 
         exp = orcamento.get('expediente', 'SEM_EXP')
+        items = orcamento.get('items', [])
         template = orcamento.get('template', '').upper()
-        if not template or template not in TEMPLATES:
+        # Se tem mais de 11 itens forca MULTIMAP (Rogama so tem 11 linhas)
+        if len(items) > 11:
+            template = 'MULTIMAP'
+        elif not template or template not in TEMPLATES:
             template = 'MULTIMAP' if str(exp).upper().startswith('A') else 'ROGAMA'
 
         localidad = orcamento.get('localidad', '').replace('/', '-')[:20]
